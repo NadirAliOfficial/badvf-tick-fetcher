@@ -136,4 +136,4 @@ The `.exe` will appear in the `dist/` folder.
 <div align="center">
 Built with Interactive Brokers API + Polygon.io
 </div>
-<!-- updated: 2024-02-27-r01 -->
+<!-- updated: 2024-06-18-r01 -->
