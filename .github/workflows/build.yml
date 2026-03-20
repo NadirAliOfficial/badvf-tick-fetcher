@@ -21,13 +21,14 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install ibapi requests pyinstaller
+        run: pip install ibapi requests yfinance pyinstaller
 
       - name: Build EXE
         run: |
           pyinstaller --onefile --windowed `
             --name "BADVF Tick Fetcher" `
             --icon assets/icon.ico `
+            --hidden-import yfinance `
             run_gui.py
 
       - name: Upload artifact
@@ -52,12 +53,13 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install ibapi requests pyinstaller
+        run: pip install ibapi requests yfinance pyinstaller
 
       - name: Build Mac App
         run: |
           pyinstaller --onefile --windowed \
             --name "BADVF Tick Fetcher" \
+            --hidden-import yfinance \
             run_gui.py
 
       - name: Zip the app

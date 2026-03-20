@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """
 BADVF Tick Fetcher — Desktop App
-Trades via Polygon.io + Bid/Ask via IBKR TWS
+Trades via Polygon.io (or yfinance fallback) + Bid/Ask via IBKR TWS
 """
 
 import csv
 import json
 import os
+import platform
+import subprocess
+import sys
 import threading
 import time
 import requests
@@ -26,21 +29,32 @@ OUTPUT_DIR = "output"
 BATCH_SIZE = 1000
 DAYS_BACK  = 30
 CONFIG_FILE = "config.json"
+IS_MAC     = platform.system() == "Darwin"
 # ─────────────────────────────────────────────────────────────────────────────
 
-DARK_BG    = "#0f1117"
-CARD_BG    = "#1a1d27"
-BORDER     = "#2a2d3a"
-ACCENT     = "#4f8ef7"
-GREEN      = "#22c55e"
-RED        = "#ef4444"
-YELLOW     = "#f59e0b"
-TEXT       = "#e2e8f0"
-MUTED      = "#64748b"
-FONT_MAIN  = ("Segoe UI", 10)
-FONT_BOLD  = ("Segoe UI", 10, "bold")
-FONT_TITLE = ("Segoe UI", 13, "bold")
-FONT_MONO  = ("Consolas", 9)
+# Cross-platform fonts
+if IS_MAC:
+    FONT_MAIN  = ("SF Pro Text", 11)
+    FONT_BOLD  = ("SF Pro Text", 11, "bold")
+    FONT_TITLE = ("SF Pro Display", 14, "bold")
+    FONT_MONO  = ("Menlo", 10)
+    FONT_SM    = ("SF Pro Text", 10)
+else:
+    FONT_MAIN  = ("Segoe UI", 10)
+    FONT_BOLD  = ("Segoe UI", 10, "bold")
+    FONT_TITLE = ("Segoe UI", 13, "bold")
+    FONT_MONO  = ("Consolas", 9)
+    FONT_SM    = ("Segoe UI", 9)
+
+DARK_BG = "#0f1117"
+CARD_BG = "#1a1d27"
+BORDER  = "#2a2d3a"
+ACCENT  = "#4f8ef7"
+GREEN   = "#22c55e"
+RED     = "#ef4444"
+YELLOW  = "#f59e0b"
+TEXT    = "#e2e8f0"
+MUTED   = "#64748b"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -63,7 +77,7 @@ def save_config(cfg: dict):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  IBKR
+#  IBKR — Bid/Ask
 # ══════════════════════════════════════════════════════════════════════════════
 
 class IBKRApp(EWrapper, EClient):
@@ -152,12 +166,11 @@ def fetch_ibkr_bidask(cutoff_utc, log, port=PORT) -> list:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Polygon
+#  Polygon — Trade ticks
 # ══════════════════════════════════════════════════════════════════════════════
 
 def fetch_polygon_trades(cutoff_utc, api_key, log) -> list:
     if not api_key:
-        log("  No Polygon API key set. Go to Settings and add your key.", "error")
         return []
 
     all_trades = []
@@ -177,23 +190,16 @@ def fetch_polygon_trades(cutoff_utc, api_key, log) -> list:
     while url:
         try:
             resp = requests.get(url, params=params, timeout=30)
-        except requests.ConnectionError:
-            log("  No internet connection. Check your network and try again.", "error")
-            break
-        except requests.Timeout:
-            log("  Polygon request timed out. Try again in a moment.", "error")
-            break
+        except (requests.ConnectionError, requests.Timeout):
+            log("  Polygon: network error, trying yfinance fallback...", "warn")
+            return []
 
-        if resp.status_code == 403:
-            log("  Polygon API key does not have access to OTC data.", "error")
-            log("  Make sure you are on the Starter plan or higher.", "warn")
-            break
-        elif resp.status_code == 401:
-            log("  Invalid Polygon API key. Go to Settings and update it.", "error")
-            break
+        if resp.status_code in (401, 403):
+            log("  Polygon: plan does not include OTC data, using yfinance instead...", "warn")
+            return []
         elif resp.status_code != 200:
-            log(f"  Polygon returned an unexpected error ({resp.status_code}). Try again later.", "error")
-            break
+            log(f"  Polygon: error {resp.status_code}, using yfinance instead...", "warn")
+            return []
 
         data    = resp.json()
         results = data.get("results", [])
@@ -220,7 +226,43 @@ def fetch_polygon_trades(cutoff_utc, api_key, log) -> list:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  CSV
+#  yfinance fallback — 1-min bars (free, no key needed)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def fetch_yfinance_trades(log) -> list:
+    try:
+        import yfinance as yf
+    except ImportError:
+        log("  Installing yfinance (one time only)...", "muted")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "yfinance", "-q"])
+        import yfinance as yf
+
+    ticker = yf.Ticker(SYMBOL)
+    df = ticker.history(period="30d", interval="1m")
+
+    if df.empty:
+        # Try daily if 1-min not available
+        df = ticker.history(period="30d", interval="1d")
+
+    if df.empty:
+        log("  yfinance: no data available for BADVF", "warn")
+        return []
+
+    rows = []
+    for ts, row in df.iterrows():
+        rows.append({
+            "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
+            "open":      round(row.get("Open", 0), 6),
+            "high":      round(row.get("High", 0), 6),
+            "low":       round(row.get("Low", 0), 6),
+            "close":     round(row.get("Close", 0), 6),
+            "volume":    int(row.get("Volume", 0)),
+        })
+    return rows
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  CSV helpers
 # ══════════════════════════════════════════════════════════════════════════════
 
 def save_csv(rows, filepath):
@@ -253,14 +295,30 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("BADVF Tick Fetcher")
-        self.geometry("660x680")
+        self.geometry("680x720")
         self.resizable(False, False)
         self.configure(bg=DARK_BG)
         self.cfg = load_config()
+        self._setup_styles()
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
-    # ── UI build ──────────────────────────────────────────────────────────────
+    def _setup_styles(self):
+        style = ttk.Style(self)
+        style.theme_use("clam")
+        style.configure("TProgressbar", troughcolor=CARD_BG, background=ACCENT, thickness=4)
+        style.configure("Accent.TButton", font=FONT_BOLD, background=ACCENT,
+                         foreground="white", padding=(16, 8))
+        style.map("Accent.TButton",
+                  background=[("active", "#3a7bd5"), ("disabled", MUTED)])
+        style.configure("Card.TButton", font=FONT_MAIN, background=CARD_BG,
+                         foreground=TEXT, padding=(8, 6))
+        style.map("Card.TButton",
+                  background=[("active", BORDER)])
+        style.configure("Small.TButton", font=FONT_SM, background=BORDER,
+                         foreground=TEXT, padding=(10, 6))
+        style.map("Small.TButton",
+                  background=[("active", CARD_BG)])
 
     def _build_ui(self):
         # Header
@@ -268,7 +326,7 @@ class App(tk.Tk):
         hdr.pack(fill="x")
         tk.Label(hdr, text="BADVF  Tick Fetcher", font=FONT_TITLE,
                  bg=CARD_BG, fg=TEXT).pack()
-        tk.Label(hdr, text="Trades · Bid/Ask · 30-Day History · CSV Export",
+        tk.Label(hdr, text="Trades  ·  Bid/Ask  ·  30-Day History  ·  CSV Export",
                  font=FONT_MAIN, bg=CARD_BG, fg=MUTED).pack(pady=(2, 0))
 
         # Stat cards
@@ -280,9 +338,10 @@ class App(tk.Tk):
         self._make_card(cards, "Bid/Ask Ticks", self._bidask_var).pack(side="left", expand=True, fill="x", padx=(6, 0))
 
         # Settings panel
-        cfg_frame = tk.Frame(self, bg=CARD_BG, padx=16, pady=10)
+        cfg_frame = tk.Frame(self, bg=CARD_BG, padx=16, pady=12)
         cfg_frame.pack(fill="x", padx=20, pady=(0, 8))
 
+        # API Key row
         tk.Label(cfg_frame, text="Polygon API Key", font=FONT_BOLD,
                  bg=CARD_BG, fg=MUTED).pack(anchor="w")
 
@@ -295,56 +354,56 @@ class App(tk.Tk):
             bg="#0f1117", fg=TEXT, insertbackground=TEXT,
             relief="flat", bd=0, show="•",
         )
-        self.key_entry.pack(side="left", fill="x", expand=True,
-                            ipady=6, ipadx=8)
+        self.key_entry.pack(side="left", fill="x", expand=True, ipady=6, ipadx=8)
 
-        self.show_btn = tk.Button(
-            key_row, text="Show", font=FONT_MAIN,
-            bg=BORDER, fg=MUTED, relief="flat", cursor="hand2",
-            padx=10, command=self._toggle_key_visibility,
-        )
-        self.show_btn.pack(side="left", padx=(6, 0))
+        ttk.Button(key_row, text="Show", style="Small.TButton",
+                   command=self._toggle_key_visibility).pack(side="left", padx=(6, 0))
+        ttk.Button(key_row, text="Save", style="Accent.TButton",
+                   command=self._save_key).pack(side="left", padx=(6, 0))
 
-        save_btn = tk.Button(
-            key_row, text="Save", font=FONT_BOLD,
-            bg=ACCENT, fg="white", relief="flat", cursor="hand2",
-            padx=12, command=self._save_key,
-        )
-        save_btn.pack(side="left", padx=(6, 0))
+        self.key_status = tk.Label(cfg_frame, text="", font=FONT_SM, bg=CARD_BG, fg=GREEN)
+        self.key_status.pack(anchor="w", pady=(2, 0))
 
-        self.key_status = tk.Label(cfg_frame, text="", font=("Segoe UI", 9),
-                                   bg=CARD_BG, fg=GREEN)
-        self.key_status.pack(anchor="w", pady=(4, 0))
-
-        # TWS Port
+        # Port row
         port_row = tk.Frame(cfg_frame, bg=CARD_BG)
-        port_row.pack(fill="x", pady=(10, 0))
+        port_row.pack(fill="x", pady=(8, 0))
 
         tk.Label(port_row, text="TWS Port", font=FONT_BOLD,
                  bg=CARD_BG, fg=MUTED, width=12, anchor="w").pack(side="left")
 
         self.port_var = tk.StringVar(value=str(self.cfg.get("tws_port", PORT)))
-        port_entry = tk.Entry(
-            port_row, textvariable=self.port_var, font=FONT_MONO,
-            bg="#0f1117", fg=TEXT, insertbackground=TEXT,
-            relief="flat", bd=0, width=8,
-        )
-        port_entry.pack(side="left", ipady=6, ipadx=8)
+        tk.Entry(port_row, textvariable=self.port_var, font=FONT_MONO,
+                 bg="#0f1117", fg=TEXT, insertbackground=TEXT,
+                 relief="flat", bd=0, width=8).pack(side="left", ipady=6, ipadx=8)
 
-        port_save = tk.Button(
-            port_row, text="Save", font=FONT_BOLD,
-            bg=ACCENT, fg="white", relief="flat", cursor="hand2",
-            padx=12, command=self._save_port,
-        )
-        port_save.pack(side="left", padx=(6, 0))
+        ttk.Button(port_row, text="Save", style="Accent.TButton",
+                   command=self._save_port).pack(side="left", padx=(6, 0))
 
-        self.port_status = tk.Label(cfg_frame, text="", font=("Segoe UI", 9),
-                                    bg=CARD_BG, fg=GREEN)
-        self.port_status.pack(anchor="w", pady=(4, 0))
+        self.port_status = tk.Label(cfg_frame, text="", font=FONT_SM, bg=CARD_BG, fg=GREEN)
+        self.port_status.pack(anchor="w", pady=(2, 0))
 
-        # File buttons (packed before log so they stay visible)
+        # ── Bottom section (packed first with side=BOTTOM so they stay visible) ──
+
+        # Run Now + status
+        bottom = tk.Frame(self, bg=DARK_BG, pady=12)
+        bottom.pack(side="bottom", fill="x", padx=20)
+        self._status_var = tk.StringVar(value="Ready")
+        self.status_lbl = tk.Label(bottom, textvariable=self._status_var,
+                                   font=FONT_MAIN, bg=DARK_BG, fg=MUTED, anchor="w")
+        self.status_lbl.pack(side="left")
+        self.run_btn = ttk.Button(bottom, text="  Run Now  ", style="Accent.TButton",
+                                  command=self.start_run)
+        self.run_btn.pack(side="right")
+
+        # Progress bar
+        pb_frame = tk.Frame(self, bg=DARK_BG)
+        pb_frame.pack(side="bottom", fill="x", padx=20, pady=(0, 4))
+        self.progress = ttk.Progressbar(pb_frame, mode="indeterminate", length=640)
+        self.progress.pack(fill="x")
+
+        # File buttons
         files_frame = tk.Frame(self, bg=DARK_BG)
-        files_frame.pack(fill="x", padx=20, pady=(8, 0))
+        files_frame.pack(side="bottom", fill="x", padx=20, pady=(8, 4))
 
         tk.Label(files_frame, text="Output Files", font=FONT_BOLD,
                  bg=DARK_BG, fg=MUTED, anchor="w").pack(fill="x", pady=(0, 4))
@@ -359,41 +418,14 @@ class App(tk.Tk):
             ("Bid/Ask (All)",    f"{SYMBOL}_bidask_ALL.csv"),
             ("Open Folder",      "__folder__"),
         ]:
-            tk.Button(
-                btn_row, text=label, font=FONT_MAIN,
-                bg=CARD_BG, fg=TEXT, relief="flat", cursor="hand2",
-                activebackground=BORDER, activeforeground=TEXT,
-                padx=8, pady=5,
+            ttk.Button(
+                btn_row, text=label, style="Card.TButton",
                 command=lambda f=filename: self._open_file(f),
             ).pack(side="left", expand=True, fill="x", padx=(0, 4))
 
-        # Progress bar
-        pb_frame = tk.Frame(self, bg=DARK_BG)
-        pb_frame.pack(fill="x", padx=20, pady=(10, 0))
-        self.progress = ttk.Progressbar(pb_frame, mode="indeterminate", length=600)
-        style = ttk.Style(self)
-        style.theme_use("clam")
-        style.configure("TProgressbar", troughcolor=CARD_BG, background=ACCENT, thickness=4)
-        self.progress.pack(fill="x")
-
-        # Run Now button
-        bottom = tk.Frame(self, bg=DARK_BG, pady=12)
-        bottom.pack(fill="x", padx=20)
-        self._status_var = tk.StringVar(value="Ready")
-        self.status_lbl = tk.Label(bottom, textvariable=self._status_var,
-                                   font=FONT_MAIN, bg=DARK_BG, fg=MUTED, anchor="w")
-        self.status_lbl.pack(side="left")
-        self.run_btn = tk.Button(
-            bottom, text="  Run Now  ", font=FONT_BOLD,
-            bg=ACCENT, fg="white", relief="flat", cursor="hand2",
-            activebackground="#3a7bd5", activeforeground="white",
-            padx=16, pady=6, command=self.start_run,
-        )
-        self.run_btn.pack(side="right")
-
-        # Log (fills remaining space above)
+        # ── Log (fills remaining middle space) ──
         log_frame = tk.Frame(self, bg=DARK_BG)
-        log_frame.pack(fill="both", expand=True, padx=20, pady=(8, 0), before=files_frame)
+        log_frame.pack(fill="both", expand=True, padx=20, pady=(8, 0))
         tk.Label(log_frame, text="Activity Log", font=FONT_BOLD,
                  bg=DARK_BG, fg=MUTED, anchor="w").pack(fill="x", pady=(0, 4))
         self.log_box = scrolledtext.ScrolledText(
@@ -410,7 +442,7 @@ class App(tk.Tk):
     def _make_card(self, parent, label, var):
         f = tk.Frame(parent, bg=CARD_BG, padx=16, pady=10)
         tk.Label(f, text=label, font=FONT_MAIN, bg=CARD_BG, fg=MUTED).pack(anchor="w")
-        tk.Label(f, textvariable=var, font=("Segoe UI", 20, "bold"),
+        tk.Label(f, textvariable=var, font=(FONT_TITLE[0], 20, "bold"),
                  bg=CARD_BG, fg=ACCENT).pack(anchor="w")
         return f
 
@@ -419,27 +451,25 @@ class App(tk.Tk):
     def _toggle_key_visibility(self):
         if self.key_entry.cget("show") == "•":
             self.key_entry.config(show="")
-            self.show_btn.config(text="Hide")
         else:
             self.key_entry.config(show="•")
-            self.show_btn.config(text="Show")
 
     def _save_key(self):
         key = self.key_var.get().strip()
         self.cfg["polygon_api_key"] = key
         save_config(self.cfg)
-        self.key_status.config(text="✓ API key saved", fg=GREEN)
+        self.key_status.config(text="API key saved", fg=GREEN)
         self.after(3000, lambda: self.key_status.config(text=""))
 
     def _save_port(self):
         port = self.port_var.get().strip()
         if not port.isdigit():
-            self.port_status.config(text="✗ Port must be a number", fg=RED)
+            self.port_status.config(text="Port must be a number", fg=RED)
             self.after(3000, lambda: self.port_status.config(text=""))
             return
         self.cfg["tws_port"] = int(port)
         save_config(self.cfg)
-        self.port_status.config(text="✓ Port saved", fg=GREEN)
+        self.port_status.config(text="Port saved", fg=GREEN)
         self.after(3000, lambda: self.port_status.config(text=""))
 
     # ── Log helpers ───────────────────────────────────────────────────────────
@@ -458,7 +488,7 @@ class App(tk.Tk):
     # ── Run ───────────────────────────────────────────────────────────────────
 
     def start_run(self):
-        self.run_btn.configure(state="disabled", bg=MUTED)
+        self.run_btn.configure(state="disabled")
         self.progress.start(12)
         self.set_status("Running...", ACCENT)
         threading.Thread(target=self._run_fetch, daemon=True).start()
@@ -471,14 +501,19 @@ class App(tk.Tk):
 
         self.log(f"Starting fetch for {SYMBOL} — last {DAYS_BACK} days", "muted")
 
-        # Polygon trades
-        self.log("Fetching trade ticks from Polygon.io...")
+        # Trades: try Polygon first, fall back to yfinance
+        self.log("Fetching trade data from Polygon.io...")
         trades = fetch_polygon_trades(cutoff, api_key, self.log)
+
+        if not trades:
+            self.log("Fetching trade data from Yahoo Finance (free)...", "muted")
+            trades = fetch_yfinance_trades(self.log)
+
         self._trade_var.set(f"{len(trades):,}")
         if trades:
-            self.log(f"  {len(trades):,} trade ticks received", "ok")
+            self.log(f"  {len(trades):,} trade records received", "ok")
         else:
-            self.log("  0 trade ticks — see above for details", "warn")
+            self.log("  No trade data available for this period", "warn")
 
         # IBKR bid/ask
         self.log("Fetching bid/ask ticks from IBKR TWS...")
@@ -487,7 +522,7 @@ class App(tk.Tk):
         if bidasks:
             self.log(f"  {len(bidasks):,} bid/ask ticks received", "ok")
         else:
-            self.log("  0 bid/ask ticks — make sure TWS is open and API is enabled on port 4001", "warn")
+            self.log("  No bid/ask data — make sure TWS is open and API is enabled", "warn")
 
         # Save
         self.log("Saving CSV files...")
@@ -497,17 +532,14 @@ class App(tk.Tk):
         append_to_master(bidasks, f"{OUTPUT_DIR}/{SYMBOL}_bidask_ALL.csv")
 
         if trades or bidasks:
-            self.log(f"Files saved to output/ folder", "ok")
-            self.log(f"  {SYMBOL}_trades_ALL.csv  →  import into Google Sheets", "muted")
-            self.log(f"  {SYMBOL}_bidask_ALL.csv  →  import into Google Sheets", "muted")
+            self.log("Files saved to output/ folder", "ok")
         self.log("Done!", "ok")
 
         self.progress.stop()
-        self.run_btn.configure(state="normal", bg=ACCENT)
+        self.run_btn.configure(state="normal")
         self.set_status(f"Last run: {datetime.now().strftime('%H:%M:%S')}", GREEN)
 
     def _open_file(self, filename):
-        import subprocess
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if filename == "__folder__":
             path = os.path.abspath(OUTPUT_DIR)
@@ -516,10 +548,13 @@ class App(tk.Tk):
             path = os.path.abspath(
                 os.path.join(OUTPUT_DIR, filename.replace("{today}", today))
             )
-        if filename == "__folder__" or os.path.exists(path):
-            subprocess.Popen(f'explorer "{path}"' if os.name == "nt" else ["open", path], shell=(os.name == "nt"))
-        else:
+        if filename != "__folder__" and not os.path.exists(path):
             self.log(f"  File not found: {os.path.basename(path)} — run the fetch first", "warn")
+            return
+        if IS_MAC:
+            subprocess.Popen(["open", path])
+        else:
+            os.startfile(path)
 
     def on_close(self):
         self.destroy()
