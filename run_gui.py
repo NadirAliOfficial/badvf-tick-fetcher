@@ -342,23 +342,7 @@ class App(tk.Tk):
                                     bg=CARD_BG, fg=GREEN)
         self.port_status.pack(anchor="w", pady=(4, 0))
 
-        # Log
-        log_frame = tk.Frame(self, bg=DARK_BG)
-        log_frame.pack(fill="both", expand=True, padx=20)
-        tk.Label(log_frame, text="Activity Log", font=FONT_BOLD,
-                 bg=DARK_BG, fg=MUTED, anchor="w").pack(fill="x", pady=(0, 4))
-        self.log_box = scrolledtext.ScrolledText(
-            log_frame, height=12, font=FONT_MONO,
-            bg=CARD_BG, fg=TEXT, insertbackground=TEXT,
-            relief="flat", borderwidth=0, state="disabled", wrap="word",
-        )
-        self.log_box.pack(fill="both", expand=True)
-        self.log_box.tag_config("ok",    foreground=GREEN)
-        self.log_box.tag_config("error", foreground=RED)
-        self.log_box.tag_config("warn",  foreground=YELLOW)
-        self.log_box.tag_config("muted", foreground=MUTED)
-
-        # File buttons
+        # File buttons (packed before log so they stay visible)
         files_frame = tk.Frame(self, bg=DARK_BG)
         files_frame.pack(fill="x", padx=20, pady=(8, 0))
 
@@ -383,7 +367,7 @@ class App(tk.Tk):
                 command=lambda f=filename: self._open_file(f),
             ).pack(side="left", expand=True, fill="x", padx=(0, 4))
 
-        # Progress + bottom bar
+        # Progress bar
         pb_frame = tk.Frame(self, bg=DARK_BG)
         pb_frame.pack(fill="x", padx=20, pady=(10, 0))
         self.progress = ttk.Progressbar(pb_frame, mode="indeterminate", length=600)
@@ -392,6 +376,7 @@ class App(tk.Tk):
         style.configure("TProgressbar", troughcolor=CARD_BG, background=ACCENT, thickness=4)
         self.progress.pack(fill="x")
 
+        # Run Now button
         bottom = tk.Frame(self, bg=DARK_BG, pady=12)
         bottom.pack(fill="x", padx=20)
         self._status_var = tk.StringVar(value="Ready")
@@ -405,6 +390,22 @@ class App(tk.Tk):
             padx=16, pady=6, command=self.start_run,
         )
         self.run_btn.pack(side="right")
+
+        # Log (fills remaining space above)
+        log_frame = tk.Frame(self, bg=DARK_BG)
+        log_frame.pack(fill="both", expand=True, padx=20, pady=(8, 0), before=files_frame)
+        tk.Label(log_frame, text="Activity Log", font=FONT_BOLD,
+                 bg=DARK_BG, fg=MUTED, anchor="w").pack(fill="x", pady=(0, 4))
+        self.log_box = scrolledtext.ScrolledText(
+            log_frame, height=8, font=FONT_MONO,
+            bg=CARD_BG, fg=TEXT, insertbackground=TEXT,
+            relief="flat", borderwidth=0, state="disabled", wrap="word",
+        )
+        self.log_box.pack(fill="both", expand=True)
+        self.log_box.tag_config("ok",    foreground=GREEN)
+        self.log_box.tag_config("error", foreground=RED)
+        self.log_box.tag_config("warn",  foreground=YELLOW)
+        self.log_box.tag_config("muted", foreground=MUTED)
 
     def _make_card(self, parent, label, var):
         f = tk.Frame(parent, bg=CARD_BG, padx=16, pady=10)
