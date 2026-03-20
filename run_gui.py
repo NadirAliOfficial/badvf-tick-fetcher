@@ -253,7 +253,7 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("BADVF Tick Fetcher")
-        self.geometry("640x600")
+        self.geometry("660x680")
         self.resizable(False, False)
         self.configure(bg=DARK_BG)
         self.cfg = load_config()
@@ -358,9 +358,34 @@ class App(tk.Tk):
         self.log_box.tag_config("warn",  foreground=YELLOW)
         self.log_box.tag_config("muted", foreground=MUTED)
 
+        # File buttons
+        files_frame = tk.Frame(self, bg=DARK_BG)
+        files_frame.pack(fill="x", padx=20, pady=(8, 0))
+
+        tk.Label(files_frame, text="Output Files", font=FONT_BOLD,
+                 bg=DARK_BG, fg=MUTED, anchor="w").pack(fill="x", pady=(0, 4))
+
+        btn_row = tk.Frame(files_frame, bg=DARK_BG)
+        btn_row.pack(fill="x")
+
+        for label, filename in [
+            ("Trades (Today)",   f"{SYMBOL}_trades_{{today}}.csv"),
+            ("Trades (All)",     f"{SYMBOL}_trades_ALL.csv"),
+            ("Bid/Ask (Today)",  f"{SYMBOL}_bidask_{{today}}.csv"),
+            ("Bid/Ask (All)",    f"{SYMBOL}_bidask_ALL.csv"),
+            ("Open Folder",      "__folder__"),
+        ]:
+            tk.Button(
+                btn_row, text=label, font=FONT_MAIN,
+                bg=CARD_BG, fg=TEXT, relief="flat", cursor="hand2",
+                activebackground=BORDER, activeforeground=TEXT,
+                padx=8, pady=5,
+                command=lambda f=filename: self._open_file(f),
+            ).pack(side="left", expand=True, fill="x", padx=(0, 4))
+
         # Progress + bottom bar
         pb_frame = tk.Frame(self, bg=DARK_BG)
-        pb_frame.pack(fill="x", padx=20, pady=(8, 0))
+        pb_frame.pack(fill="x", padx=20, pady=(10, 0))
         self.progress = ttk.Progressbar(pb_frame, mode="indeterminate", length=600)
         style = ttk.Style(self)
         style.theme_use("clam")
@@ -479,6 +504,21 @@ class App(tk.Tk):
         self.progress.stop()
         self.run_btn.configure(state="normal", bg=ACCENT)
         self.set_status(f"Last run: {datetime.now().strftime('%H:%M:%S')}", GREEN)
+
+    def _open_file(self, filename):
+        import subprocess
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if filename == "__folder__":
+            path = os.path.abspath(OUTPUT_DIR)
+            os.makedirs(path, exist_ok=True)
+        else:
+            path = os.path.abspath(
+                os.path.join(OUTPUT_DIR, filename.replace("{today}", today))
+            )
+        if filename == "__folder__" or os.path.exists(path):
+            subprocess.Popen(f'explorer "{path}"' if os.name == "nt" else ["open", path], shell=(os.name == "nt"))
+        else:
+            self.log(f"  File not found: {os.path.basename(path)} — run the fetch first", "warn")
 
     def on_close(self):
         self.destroy()
