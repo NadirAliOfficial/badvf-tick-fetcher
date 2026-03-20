@@ -96,11 +96,11 @@ class IBKRApp(EWrapper, EClient):
             self._done.set()
 
 
-def fetch_ibkr_bidask(cutoff_utc, log) -> list:
+def fetch_ibkr_bidask(cutoff_utc, log, port=PORT) -> list:
     client_id = int(time.time()) % 9000 + 1000
     app = IBKRApp()
     try:
-        app.connect(HOST, PORT, client_id)
+        app.connect(HOST, port, client_id)
     except Exception:
         log("  Could not connect to TWS. Make sure TWS is open and logged in.", "error")
         return []
@@ -316,6 +316,32 @@ class App(tk.Tk):
                                    bg=CARD_BG, fg=GREEN)
         self.key_status.pack(anchor="w", pady=(4, 0))
 
+        # TWS Port
+        port_row = tk.Frame(cfg_frame, bg=CARD_BG)
+        port_row.pack(fill="x", pady=(10, 0))
+
+        tk.Label(port_row, text="TWS Port", font=FONT_BOLD,
+                 bg=CARD_BG, fg=MUTED, width=12, anchor="w").pack(side="left")
+
+        self.port_var = tk.StringVar(value=str(self.cfg.get("tws_port", PORT)))
+        port_entry = tk.Entry(
+            port_row, textvariable=self.port_var, font=FONT_MONO,
+            bg="#0f1117", fg=TEXT, insertbackground=TEXT,
+            relief="flat", bd=0, width=8,
+        )
+        port_entry.pack(side="left", ipady=6, ipadx=8)
+
+        port_save = tk.Button(
+            port_row, text="Save", font=FONT_BOLD,
+            bg=ACCENT, fg="white", relief="flat", cursor="hand2",
+            padx=12, command=self._save_port,
+        )
+        port_save.pack(side="left", padx=(6, 0))
+
+        self.port_status = tk.Label(cfg_frame, text="", font=("Segoe UI", 9),
+                                    bg=CARD_BG, fg=GREEN)
+        self.port_status.pack(anchor="w", pady=(4, 0))
+
         # Log
         log_frame = tk.Frame(self, bg=DARK_BG)
         log_frame.pack(fill="both", expand=True, padx=20)
@@ -379,6 +405,17 @@ class App(tk.Tk):
         self.key_status.config(text="✓ API key saved", fg=GREEN)
         self.after(3000, lambda: self.key_status.config(text=""))
 
+    def _save_port(self):
+        port = self.port_var.get().strip()
+        if not port.isdigit():
+            self.port_status.config(text="✗ Port must be a number", fg=RED)
+            self.after(3000, lambda: self.port_status.config(text=""))
+            return
+        self.cfg["tws_port"] = int(port)
+        save_config(self.cfg)
+        self.port_status.config(text="✓ Port saved", fg=GREEN)
+        self.after(3000, lambda: self.port_status.config(text=""))
+
     # ── Log helpers ───────────────────────────────────────────────────────────
 
     def log(self, msg, tag=None):
@@ -404,6 +441,7 @@ class App(tk.Tk):
         today   = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         cutoff  = datetime.now(timezone.utc) - timedelta(days=DAYS_BACK)
         api_key = self.cfg.get("polygon_api_key", "").strip()
+        port    = int(self.cfg.get("tws_port", PORT))
 
         self.log(f"Starting fetch for {SYMBOL} — last {DAYS_BACK} days", "muted")
 
@@ -418,7 +456,7 @@ class App(tk.Tk):
 
         # IBKR bid/ask
         self.log("Fetching bid/ask ticks from IBKR TWS...")
-        bidasks = fetch_ibkr_bidask(cutoff, self.log)
+        bidasks = fetch_ibkr_bidask(cutoff, self.log, port)
         self._bidask_var.set(f"{len(bidasks):,}")
         if bidasks:
             self.log(f"  {len(bidasks):,} bid/ask ticks received", "ok")
