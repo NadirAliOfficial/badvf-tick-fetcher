@@ -1,0 +1,64 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install ibapi requests pyinstaller
+
+      - name: Build EXE
+        run: |
+          pyinstaller --onefile --windowed `
+            --name "BADVF Tick Fetcher" `
+            --icon assets/icon.ico `
+            run_gui.py
+
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BADVF-Tick-Fetcher-Windows
+          path: dist/BADVF Tick Fetcher.exe
+          retention-days: 30
+
+      - name: Create Release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: "BADVF Tick Fetcher v${{ github.run_number }}"
+          body: |
+            ## BADVF Tick Fetcher — Windows Desktop App
+
+            ### Download
+            Click **BADVF Tick Fetcher.exe** below to download.
+
+            ### How to use
+            1. Make sure **TWS (Interactive Brokers)** is open and logged in
+            2. Double-click **BADVF Tick Fetcher.exe**
+            3. Click **Run Now**
+            4. CSV files saved to the `output/` folder next to the exe
+
+            ### Output files
+            | File | Contents |
+            |---|---|
+            | `BADVF_trades_ALL.csv` | All trade ticks (Polygon) |
+            | `BADVF_bidask_ALL.csv` | All bid/ask quotes (IBKR) |
+          files: "dist/BADVF Tick Fetcher.exe"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
