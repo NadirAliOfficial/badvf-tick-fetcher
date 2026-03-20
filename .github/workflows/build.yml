@@ -1,4 +1,4 @@
-name: Build Windows EXE
+name: Build Desktop App
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  build-windows:
     runs-on: windows-latest
     permissions:
       contents: write
@@ -21,8 +21,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: |
-          pip install ibapi requests pyinstaller
+        run: pip install ibapi requests pyinstaller
 
       - name: Build EXE
         run: |
@@ -31,36 +30,97 @@ jobs:
             --icon assets/icon.ico `
             run_gui.py
 
-      - name: Upload EXE artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: BADVF-Tick-Fetcher-Windows
           path: dist/BADVF Tick Fetcher.exe
           retention-days: 30
 
+  build-mac:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install ibapi requests pyinstaller
+
+      - name: Build Mac App
+        run: |
+          pyinstaller --onefile --windowed \
+            --name "BADVF Tick Fetcher" \
+            run_gui.py
+
+      - name: Zip the app
+        run: |
+          cd dist
+          zip -r "BADVF Tick Fetcher Mac.zip" "BADVF Tick Fetcher.app" 2>/dev/null || \
+          zip -r "BADVF Tick Fetcher Mac.zip" "BADVF Tick Fetcher"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BADVF-Tick-Fetcher-Mac
+          path: dist/BADVF Tick Fetcher Mac.zip
+          retention-days: 30
+
+  release:
+    needs: [build-windows, build-mac]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: BADVF-Tick-Fetcher-Windows
+          path: windows
+
+      - name: Download Mac artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: BADVF-Tick-Fetcher-Mac
+          path: mac
+
       - name: Create Release
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ github.run_number }}
           name: "BADVF Tick Fetcher v${{ github.run_number }}"
           body: |
-            ## BADVF Tick Fetcher — Windows Desktop App
+            ## BADVF Tick Fetcher — Desktop App
 
             ### Download
-            Click **BADVF Tick Fetcher.exe** below to download.
+            | Platform | File |
+            |---|---|
+            | **Windows** | `BADVF Tick Fetcher.exe` |
+            | **macOS** | `BADVF Tick Fetcher Mac.zip` |
 
             ### How to use
             1. Make sure **TWS (Interactive Brokers)** is open and logged in
-            2. Double-click **BADVF Tick Fetcher.exe**
-            3. Click **Run Now**
-            4. CSV files saved to the `output/` folder next to the exe
+            2. Open the app
+            3. Paste your **Polygon API key** in Settings and click Save
+            4. Click **Run Now**
+            5. CSV files saved to the `output/` folder
 
             ### Output files
             | File | Contents |
             |---|---|
             | `BADVF_trades_ALL.csv` | All trade ticks (Polygon) |
             | `BADVF_bidask_ALL.csv` | All bid/ask quotes (IBKR) |
-          files: "dist/BADVF Tick Fetcher.exe"
+          files: |
+            windows/BADVF Tick Fetcher.exe
+            mac/BADVF Tick Fetcher Mac.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
