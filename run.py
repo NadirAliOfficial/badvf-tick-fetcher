@@ -33,7 +33,7 @@ CLIENT_ID       = int(time.time()) % 9000 + 1000  # unique ID each run
 OUTPUT_DIR      = "output"
 BATCH_SIZE      = 1000
 DAYS_BACK       = 30
-POLYGON_API_KEY = "bIqgwroBoIiRcM5soBBmH1faxA2DZ8NI"
+POLYGON_API_KEY = "MEFLU456V930PDWpHqOYCiKli5NU8J8q"
 # ─────────────────────────────────────────────────────────────────────────────
 
 

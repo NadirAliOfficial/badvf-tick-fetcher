@@ -174,53 +174,64 @@ def fetch_polygon_trades(cutoff_utc, api_key, log) -> list:
         return []
 
     all_trades = []
-    start_ns   = int(cutoff_utc.timestamp() * 1_000_000_000)
-    end_ns     = int(datetime.now(timezone.utc).timestamp() * 1_000_000_000)
-    url        = f"https://api.polygon.io/v3/trades/{SYMBOL}"
+    start_date = cutoff_utc.strftime("%Y-%m-%d")
+    end_date   = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    params = {
-        "timestamp.gte": start_ns,
-        "timestamp.lte": end_ns,
-        "limit":         50000,
-        "sort":          "timestamp",
-        "order":         "asc",
-        "apiKey":        api_key,
-    }
+    # 1-minute bars for the full 30-day range
+    log("  Fetching 1-minute bars from Polygon...", "muted")
+    url = f"https://api.polygon.io/v2/aggs/ticker/{SYMBOL}/range/1/minute/{start_date}/{end_date}"
+    params = {"adjusted": "true", "sort": "asc", "limit": 50000, "apiKey": api_key}
 
-    while url:
+    try:
+        resp = requests.get(url, params=params, timeout=30)
+    except (requests.ConnectionError, requests.Timeout):
+        log("  Polygon: network error, trying yfinance fallback...", "warn")
+        return []
+
+    if resp.status_code in (401, 403):
+        log("  Polygon: access denied, trying yfinance fallback...", "warn")
+        return []
+    elif resp.status_code != 200:
+        log(f"  Polygon: error {resp.status_code}, trying yfinance fallback...", "warn")
+        return []
+
+    data    = resp.json()
+    results = data.get("results", [])
+
+    for bar in results:
+        ts = datetime.fromtimestamp(bar["t"] / 1000, tz=timezone.utc)
+        all_trades.append({
+            "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
+            "open":      bar.get("o"),
+            "high":      bar.get("h"),
+            "low":       bar.get("l"),
+            "close":     bar.get("c"),
+            "volume":    bar.get("v"),
+            "vwap":      bar.get("vw"),
+            "trades":    bar.get("n"),
+        })
+
+    if not all_trades:
+        # Fall back to daily bars
+        log("  No 1-min data, trying daily bars...", "muted")
+        url = f"https://api.polygon.io/v2/aggs/ticker/{SYMBOL}/range/1/day/{start_date}/{end_date}"
         try:
             resp = requests.get(url, params=params, timeout=30)
-        except (requests.ConnectionError, requests.Timeout):
-            log("  Polygon: network error, trying yfinance fallback...", "warn")
-            return []
-
-        if resp.status_code in (401, 403):
-            log("  Polygon: plan does not include OTC data, using yfinance instead...", "warn")
-            return []
-        elif resp.status_code != 200:
-            log(f"  Polygon: error {resp.status_code}, using yfinance instead...", "warn")
-            return []
-
-        data    = resp.json()
-        results = data.get("results", [])
-
-        for t in results:
-            ts_ns = t.get("participant_timestamp") or t.get("sip_timestamp", 0)
-            ts    = datetime.fromtimestamp(ts_ns / 1_000_000_000, tz=timezone.utc)
-            all_trades.append({
-                "timestamp":  ts.strftime("%Y-%m-%d %H:%M:%S"),
-                "price":      t.get("price"),
-                "size":       t.get("size"),
-                "exchange":   t.get("exchange"),
-                "conditions": ",".join(str(c) for c in t.get("conditions", [])),
-            })
-
-        next_url = data.get("next_url")
-        if next_url:
-            url    = next_url
-            params = {"apiKey": api_key}
-        else:
-            break
+            if resp.status_code == 200:
+                for bar in resp.json().get("results", []):
+                    ts = datetime.fromtimestamp(bar["t"] / 1000, tz=timezone.utc)
+                    all_trades.append({
+                        "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
+                        "open":      bar.get("o"),
+                        "high":      bar.get("h"),
+                        "low":       bar.get("l"),
+                        "close":     bar.get("c"),
+                        "volume":    bar.get("v"),
+                        "vwap":      bar.get("vw"),
+                        "trades":    bar.get("n"),
+                    })
+        except Exception:
+            pass
 
     return all_trades
 
@@ -238,26 +249,52 @@ def fetch_yfinance_trades(log) -> list:
         import yfinance as yf
 
     ticker = yf.Ticker(SYMBOL)
-    df = ticker.history(period="30d", interval="1m")
-
-    if df.empty:
-        # Try daily if 1-min not available
-        df = ticker.history(period="30d", interval="1d")
-
-    if df.empty:
-        log("  yfinance: no data available for BADVF", "warn")
-        return []
-
     rows = []
-    for ts, row in df.iterrows():
-        rows.append({
-            "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
-            "open":      round(row.get("Open", 0), 6),
-            "high":      round(row.get("High", 0), 6),
-            "low":       round(row.get("Low", 0), 6),
-            "close":     round(row.get("Close", 0), 6),
-            "volume":    int(row.get("Volume", 0)),
-        })
+
+    # 1-min bars: yfinance allows max 8 days per request
+    log("  Fetching 1-min bars (last 8 days)...", "muted")
+    try:
+        df = ticker.history(period="7d", interval="1m")
+    except Exception:
+        df = None
+
+    if df is not None and not df.empty:
+        for ts, row in df.iterrows():
+            rows.append({
+                "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
+                "open":      round(row.get("Open", 0), 6),
+                "high":      round(row.get("High", 0), 6),
+                "low":       round(row.get("Low", 0), 6),
+                "close":     round(row.get("Close", 0), 6),
+                "volume":    int(row.get("Volume", 0)),
+            })
+
+    # Daily bars for the full 30 days
+    log("  Fetching daily bars (last 30 days)...", "muted")
+    try:
+        df_daily = ticker.history(period="30d", interval="1d")
+    except Exception:
+        df_daily = None
+
+    if df_daily is not None and not df_daily.empty:
+        existing_dates = {r["timestamp"][:10] for r in rows}
+        for ts, row in df_daily.iterrows():
+            date_str = ts.strftime("%Y-%m-%d")
+            if date_str not in existing_dates:
+                rows.append({
+                    "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
+                    "open":      round(row.get("Open", 0), 6),
+                    "high":      round(row.get("High", 0), 6),
+                    "low":       round(row.get("Low", 0), 6),
+                    "close":     round(row.get("Close", 0), 6),
+                    "volume":    int(row.get("Volume", 0)),
+                })
+
+    rows.sort(key=lambda r: r["timestamp"])
+
+    if not rows:
+        log("  yfinance: no data available for BADVF", "warn")
+
     return rows
 
 
@@ -391,8 +428,19 @@ class App(tk.Tk):
         self.status_lbl = tk.Label(bottom, textvariable=self._status_var,
                                    font=FONT_MAIN, bg=DARK_BG, fg=MUTED, anchor="w")
         self.status_lbl.pack(side="left")
-        self.run_btn = ttk.Button(bottom, text="  Run Now  ", style="Accent.TButton",
-                                  command=self.start_run)
+        if IS_MAC:
+            self.run_btn = tk.Button(
+                bottom, text="  Run Now  ", font=FONT_BOLD,
+                highlightbackground=ACCENT, fg="white",
+                padx=16, pady=6, command=self.start_run,
+            )
+        else:
+            self.run_btn = tk.Button(
+                bottom, text="  Run Now  ", font=FONT_BOLD,
+                bg=ACCENT, fg="white", relief="flat", cursor="hand2",
+                activebackground="#3a7bd5", activeforeground="white",
+                padx=16, pady=6, command=self.start_run,
+            )
         self.run_btn.pack(side="right")
 
         # Progress bar
@@ -488,7 +536,7 @@ class App(tk.Tk):
     # ── Run ───────────────────────────────────────────────────────────────────
 
     def start_run(self):
-        self.run_btn.configure(state="disabled")
+        self.run_btn.configure(state="disabled", text="  Running...  ")
         self.progress.start(12)
         self.set_status("Running...", ACCENT)
         threading.Thread(target=self._run_fetch, daemon=True).start()
@@ -536,7 +584,7 @@ class App(tk.Tk):
         self.log("Done!", "ok")
 
         self.progress.stop()
-        self.run_btn.configure(state="normal")
+        self.run_btn.configure(state="normal", text="  Run Now  ")
         self.set_status(f"Last run: {datetime.now().strftime('%H:%M:%S')}", GREEN)
 
     def _open_file(self, filename):
