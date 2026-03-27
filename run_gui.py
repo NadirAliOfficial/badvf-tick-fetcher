@@ -23,6 +23,7 @@ from ibapi.contract import Contract
 
 # ── Config ───────────────────────────────────────────────────────────────────
 SYMBOL     = "BADVF"
+SYMBOL_CSE = "BAD.CN"
 HOST       = "127.0.0.1"
 PORT       = 4001
 OUTPUT_DIR = "output"
@@ -262,10 +263,10 @@ def fetch_yfinance_trades(log) -> list:
         for ts, row in df.iterrows():
             rows.append({
                 "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
-                "open":      round(row.get("Open", 0), 6),
-                "high":      round(row.get("High", 0), 6),
-                "low":       round(row.get("Low", 0), 6),
-                "close":     round(row.get("Close", 0), 6),
+                "open":      float(round(row.get("Open", 0), 6)),
+                "high":      float(round(row.get("High", 0), 6)),
+                "low":       float(round(row.get("Low", 0), 6)),
+                "close":     float(round(row.get("Close", 0), 6)),
                 "volume":    int(row.get("Volume", 0)),
             })
 
@@ -283,10 +284,10 @@ def fetch_yfinance_trades(log) -> list:
             if date_str not in existing_dates:
                 rows.append({
                     "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
-                    "open":      round(row.get("Open", 0), 6),
-                    "high":      round(row.get("High", 0), 6),
-                    "low":       round(row.get("Low", 0), 6),
-                    "close":     round(row.get("Close", 0), 6),
+                    "open":      float(round(row.get("Open", 0), 6)),
+                    "high":      float(round(row.get("High", 0), 6)),
+                    "low":       float(round(row.get("Low", 0), 6)),
+                    "close":     float(round(row.get("Close", 0), 6)),
                     "volume":    int(row.get("Volume", 0)),
                 })
 
@@ -294,6 +295,68 @@ def fetch_yfinance_trades(log) -> list:
 
     if not rows:
         log("  yfinance: no data available for BADVF", "warn")
+
+    return rows
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  CSE (BAD.CN) — via yfinance
+# ══════════════════════════════════════════════════════════════════════════════
+
+def fetch_cse_trades(log) -> list:
+    try:
+        import yfinance as yf
+    except ImportError:
+        log("  Installing yfinance (one time only)...", "muted")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "yfinance", "-q"])
+        import yfinance as yf
+
+    ticker = yf.Ticker(SYMBOL_CSE)
+    rows = []
+
+    # 1-min bars (max 8 days)
+    log(f"  Fetching {SYMBOL_CSE} 1-min bars (last 7 days)...", "muted")
+    try:
+        df = ticker.history(period="7d", interval="1m")
+    except Exception:
+        df = None
+
+    if df is not None and not df.empty:
+        for ts, row in df.iterrows():
+            rows.append({
+                "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
+                "open":      float(round(row.get("Open", 0), 6)),
+                "high":      float(round(row.get("High", 0), 6)),
+                "low":       float(round(row.get("Low", 0), 6)),
+                "close":     float(round(row.get("Close", 0), 6)),
+                "volume":    int(row.get("Volume", 0)),
+            })
+
+    # Daily bars for full 30 days
+    log(f"  Fetching {SYMBOL_CSE} daily bars (last 30 days)...", "muted")
+    try:
+        df_daily = ticker.history(period="30d", interval="1d")
+    except Exception:
+        df_daily = None
+
+    if df_daily is not None and not df_daily.empty:
+        existing_dates = {r["timestamp"][:10] for r in rows}
+        for ts, row in df_daily.iterrows():
+            date_str = ts.strftime("%Y-%m-%d")
+            if date_str not in existing_dates:
+                rows.append({
+                    "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
+                    "open":      float(round(row.get("Open", 0), 6)),
+                    "high":      float(round(row.get("High", 0), 6)),
+                    "low":       float(round(row.get("Low", 0), 6)),
+                    "close":     float(round(row.get("Close", 0), 6)),
+                    "volume":    int(row.get("Volume", 0)),
+                })
+
+    rows.sort(key=lambda r: r["timestamp"])
+
+    if not rows:
+        log(f"  yfinance: no data available for {SYMBOL_CSE}", "warn")
 
     return rows
 
@@ -363,7 +426,7 @@ class App(tk.Tk):
         hdr.pack(fill="x")
         tk.Label(hdr, text="BADVF  Tick Fetcher", font=FONT_TITLE,
                  bg=CARD_BG, fg=TEXT).pack()
-        tk.Label(hdr, text="Trades  ·  Bid/Ask  ·  30-Day History  ·  CSV Export",
+        tk.Label(hdr, text="OTC + CSE  ·  Trades  ·  Bid/Ask  ·  30-Day History  ·  CSV",
                  font=FONT_MAIN, bg=CARD_BG, fg=MUTED).pack(pady=(2, 0))
 
         # Stat cards
@@ -371,8 +434,10 @@ class App(tk.Tk):
         cards.pack(fill="x", padx=20)
         self._trade_var  = tk.StringVar(value="—")
         self._bidask_var = tk.StringVar(value="—")
-        self._make_card(cards, "Trade Ticks",   self._trade_var).pack(side="left", expand=True, fill="x", padx=(0, 6))
-        self._make_card(cards, "Bid/Ask Ticks", self._bidask_var).pack(side="left", expand=True, fill="x", padx=(6, 0))
+        self._cse_var    = tk.StringVar(value="—")
+        self._make_card(cards, "OTC Trades",    self._trade_var).pack(side="left", expand=True, fill="x", padx=(0, 4))
+        self._make_card(cards, "Bid/Ask",       self._bidask_var).pack(side="left", expand=True, fill="x", padx=(4, 4))
+        self._make_card(cards, "CSE Trades",    self._cse_var).pack(side="left", expand=True, fill="x", padx=(4, 0))
 
         # Settings panel
         cfg_frame = tk.Frame(self, bg=CARD_BG, padx=16, pady=12)
@@ -460,11 +525,10 @@ class App(tk.Tk):
         btn_row.pack(fill="x")
 
         for label, filename in [
-            ("Trades (Today)",   f"{SYMBOL}_trades_{{today}}.csv"),
-            ("Trades (All)",     f"{SYMBOL}_trades_ALL.csv"),
-            ("Bid/Ask (Today)",  f"{SYMBOL}_bidask_{{today}}.csv"),
-            ("Bid/Ask (All)",    f"{SYMBOL}_bidask_ALL.csv"),
-            ("Open Folder",      "__folder__"),
+            ("OTC Trades",   f"{SYMBOL}_trades_ALL.csv"),
+            ("Bid/Ask",      f"{SYMBOL}_bidask_ALL.csv"),
+            ("CSE Trades",   "BAD_CSE_trades_ALL.csv"),
+            ("Open Folder",  "__folder__"),
         ]:
             ttk.Button(
                 btn_row, text=label, style="Card.TButton",
@@ -572,14 +636,25 @@ class App(tk.Tk):
         else:
             self.log("  No bid/ask data — make sure TWS is open and API is enabled", "warn")
 
+        # CSE trades (BAD.CN)
+        self.log(f"Fetching CSE trade data for {SYMBOL_CSE}...")
+        cse_trades = fetch_cse_trades(self.log)
+        self._cse_var.set(f"{len(cse_trades):,}")
+        if cse_trades:
+            self.log(f"  {len(cse_trades):,} CSE trade records received", "ok")
+        else:
+            self.log("  No CSE trade data available", "warn")
+
         # Save
         self.log("Saving CSV files...")
-        save_csv(trades,  f"{OUTPUT_DIR}/{SYMBOL}_trades_{today}.csv")
-        save_csv(bidasks, f"{OUTPUT_DIR}/{SYMBOL}_bidask_{today}.csv")
-        append_to_master(trades,  f"{OUTPUT_DIR}/{SYMBOL}_trades_ALL.csv")
-        append_to_master(bidasks, f"{OUTPUT_DIR}/{SYMBOL}_bidask_ALL.csv")
+        save_csv(trades,     f"{OUTPUT_DIR}/{SYMBOL}_trades_{today}.csv")
+        save_csv(bidasks,    f"{OUTPUT_DIR}/{SYMBOL}_bidask_{today}.csv")
+        save_csv(cse_trades, f"{OUTPUT_DIR}/BAD_CSE_trades_{today}.csv")
+        append_to_master(trades,     f"{OUTPUT_DIR}/{SYMBOL}_trades_ALL.csv")
+        append_to_master(bidasks,    f"{OUTPUT_DIR}/{SYMBOL}_bidask_ALL.csv")
+        append_to_master(cse_trades, f"{OUTPUT_DIR}/BAD_CSE_trades_ALL.csv")
 
-        if trades or bidasks:
+        if trades or bidasks or cse_trades:
             self.log("Files saved to output/ folder", "ok")
         self.log("Done!", "ok")
 
