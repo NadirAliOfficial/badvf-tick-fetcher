@@ -111,24 +111,17 @@ class IBKRApp(EWrapper, EClient):
             self._done.set()
 
 
-def fetch_ibkr_bidask(cutoff_utc, log, port=PORT) -> list:
+def _fetch_bidask(cutoff_utc, log, port, contract, label) -> list:
     client_id = int(time.time()) % 9000 + 1000
     app = IBKRApp()
     try:
         app.connect(HOST, port, client_id)
     except Exception:
-        log("  Could not connect to TWS. Make sure TWS is open and logged in.", "error")
+        log(f"  Could not connect to TWS for {label}. Make sure TWS is open and logged in.", "error")
         return []
 
     threading.Thread(target=app.run, daemon=True).start()
     time.sleep(2)
-
-    contract = Contract()
-    contract.symbol      = SYMBOL
-    contract.secType     = "STK"
-    contract.exchange    = "SMART"
-    contract.currency    = "USD"
-    contract.primaryExch = "PINK"
 
     all_ticks = []
     end_dt    = datetime.now(timezone.utc)
@@ -164,6 +157,26 @@ def fetch_ibkr_bidask(cutoff_utc, log, port=PORT) -> list:
 
     app.disconnect()
     return all_ticks
+
+
+def fetch_ibkr_bidask(cutoff_utc, log, port=PORT) -> list:
+    contract = Contract()
+    contract.symbol      = SYMBOL
+    contract.secType     = "STK"
+    contract.exchange    = "SMART"
+    contract.currency    = "USD"
+    contract.primaryExch = "PINK"
+    return _fetch_bidask(cutoff_utc, log, port, contract, "OTC Bid/Ask")
+
+
+def fetch_ibkr_bidask_cse(cutoff_utc, log, port=PORT) -> list:
+    contract = Contract()
+    contract.symbol      = "BAD"
+    contract.secType     = "STK"
+    contract.exchange    = "SMART"
+    contract.currency    = "CAD"
+    contract.primaryExch = "CSE"
+    return _fetch_bidask(cutoff_utc, log, port, contract, "CSE Bid/Ask")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -395,7 +408,7 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("BADVF Tick Fetcher")
-        self.geometry("680x720")
+        self.geometry("780x750")
         self.resizable(False, False)
         self.configure(bg=DARK_BG)
         self.cfg = load_config()
@@ -432,12 +445,14 @@ class App(tk.Tk):
         # Stat cards
         cards = tk.Frame(self, bg=DARK_BG, pady=10)
         cards.pack(fill="x", padx=20)
-        self._trade_var  = tk.StringVar(value="—")
-        self._bidask_var = tk.StringVar(value="—")
-        self._cse_var    = tk.StringVar(value="—")
+        self._trade_var      = tk.StringVar(value="—")
+        self._bidask_var     = tk.StringVar(value="—")
+        self._cse_var        = tk.StringVar(value="—")
+        self._cse_bidask_var = tk.StringVar(value="—")
         self._make_card(cards, "OTC Trades",    self._trade_var).pack(side="left", expand=True, fill="x", padx=(0, 4))
-        self._make_card(cards, "Bid/Ask",       self._bidask_var).pack(side="left", expand=True, fill="x", padx=(4, 4))
-        self._make_card(cards, "CSE Trades",    self._cse_var).pack(side="left", expand=True, fill="x", padx=(4, 0))
+        self._make_card(cards, "OTC Bid/Ask",   self._bidask_var).pack(side="left", expand=True, fill="x", padx=(4, 4))
+        self._make_card(cards, "CSE Trades",    self._cse_var).pack(side="left", expand=True, fill="x", padx=(4, 4))
+        self._make_card(cards, "CSE Bid/Ask",   self._cse_bidask_var).pack(side="left", expand=True, fill="x", padx=(4, 0))
 
         # Settings panel
         cfg_frame = tk.Frame(self, bg=CARD_BG, padx=16, pady=12)
@@ -526,8 +541,9 @@ class App(tk.Tk):
 
         for label, filename in [
             ("OTC Trades",   f"{SYMBOL}_trades_ALL.csv"),
-            ("Bid/Ask",      f"{SYMBOL}_bidask_ALL.csv"),
+            ("OTC Bid/Ask",  f"{SYMBOL}_bidask_ALL.csv"),
             ("CSE Trades",   "BAD_CSE_trades_ALL.csv"),
+            ("CSE Bid/Ask",  "BAD_CSE_bidask_ALL.csv"),
             ("Open Folder",  "__folder__"),
         ]:
             ttk.Button(
@@ -627,14 +643,14 @@ class App(tk.Tk):
         else:
             self.log("  No trade data available for this period", "warn")
 
-        # IBKR bid/ask
-        self.log("Fetching bid/ask ticks from IBKR TWS...")
+        # OTC bid/ask
+        self.log("Fetching OTC bid/ask ticks from IBKR TWS...")
         bidasks = fetch_ibkr_bidask(cutoff, self.log, port)
         self._bidask_var.set(f"{len(bidasks):,}")
         if bidasks:
-            self.log(f"  {len(bidasks):,} bid/ask ticks received", "ok")
+            self.log(f"  {len(bidasks):,} OTC bid/ask ticks received", "ok")
         else:
-            self.log("  No bid/ask data — make sure TWS is open and API is enabled", "warn")
+            self.log("  No OTC bid/ask data — make sure TWS is open and API is enabled", "warn")
 
         # CSE trades (BAD.CN)
         self.log(f"Fetching CSE trade data for {SYMBOL_CSE}...")
@@ -645,16 +661,27 @@ class App(tk.Tk):
         else:
             self.log("  No CSE trade data available", "warn")
 
+        # CSE bid/ask
+        self.log("Fetching CSE bid/ask ticks from IBKR TWS...")
+        cse_bidasks = fetch_ibkr_bidask_cse(cutoff, self.log, port)
+        self._cse_bidask_var.set(f"{len(cse_bidasks):,}")
+        if cse_bidasks:
+            self.log(f"  {len(cse_bidasks):,} CSE bid/ask ticks received", "ok")
+        else:
+            self.log("  No CSE bid/ask data — BAD may not be available via IBKR", "warn")
+
         # Save
         self.log("Saving CSV files...")
-        save_csv(trades,     f"{OUTPUT_DIR}/{SYMBOL}_trades_{today}.csv")
-        save_csv(bidasks,    f"{OUTPUT_DIR}/{SYMBOL}_bidask_{today}.csv")
-        save_csv(cse_trades, f"{OUTPUT_DIR}/BAD_CSE_trades_{today}.csv")
-        append_to_master(trades,     f"{OUTPUT_DIR}/{SYMBOL}_trades_ALL.csv")
-        append_to_master(bidasks,    f"{OUTPUT_DIR}/{SYMBOL}_bidask_ALL.csv")
-        append_to_master(cse_trades, f"{OUTPUT_DIR}/BAD_CSE_trades_ALL.csv")
+        save_csv(trades,      f"{OUTPUT_DIR}/{SYMBOL}_trades_{today}.csv")
+        save_csv(bidasks,     f"{OUTPUT_DIR}/{SYMBOL}_bidask_{today}.csv")
+        save_csv(cse_trades,  f"{OUTPUT_DIR}/BAD_CSE_trades_{today}.csv")
+        save_csv(cse_bidasks, f"{OUTPUT_DIR}/BAD_CSE_bidask_{today}.csv")
+        append_to_master(trades,      f"{OUTPUT_DIR}/{SYMBOL}_trades_ALL.csv")
+        append_to_master(bidasks,     f"{OUTPUT_DIR}/{SYMBOL}_bidask_ALL.csv")
+        append_to_master(cse_trades,  f"{OUTPUT_DIR}/BAD_CSE_trades_ALL.csv")
+        append_to_master(cse_bidasks, f"{OUTPUT_DIR}/BAD_CSE_bidask_ALL.csv")
 
-        if trades or bidasks or cse_trades:
+        if trades or bidasks or cse_trades or cse_bidasks:
             self.log("Files saved to output/ folder", "ok")
         self.log("Done!", "ok")
 
