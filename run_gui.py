@@ -274,13 +274,16 @@ def fetch_yfinance_trades(log) -> list:
 
     if df is not None and not df.empty:
         for ts, row in df.iterrows():
+            h, l, c = float(row.get("High", 0)), float(row.get("Low", 0)), float(row.get("Close", 0))
             rows.append({
                 "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
                 "open":      float(round(row.get("Open", 0), 6)),
-                "high":      float(round(row.get("High", 0), 6)),
-                "low":       float(round(row.get("Low", 0), 6)),
-                "close":     float(round(row.get("Close", 0), 6)),
+                "high":      float(round(h, 6)),
+                "low":       float(round(l, 6)),
+                "close":     float(round(c, 6)),
                 "volume":    int(row.get("Volume", 0)),
+                "vwap":      float(round((h + l + c) / 3, 6)) if (h + l + c) else "",
+                "trades":    "",
             })
 
     # Daily bars for the full 30 days
@@ -295,13 +298,16 @@ def fetch_yfinance_trades(log) -> list:
         for ts, row in df_daily.iterrows():
             date_str = ts.strftime("%Y-%m-%d")
             if date_str not in existing_dates:
+                h, l, c = float(row.get("High", 0)), float(row.get("Low", 0)), float(row.get("Close", 0))
                 rows.append({
                     "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
                     "open":      float(round(row.get("Open", 0), 6)),
-                    "high":      float(round(row.get("High", 0), 6)),
-                    "low":       float(round(row.get("Low", 0), 6)),
-                    "close":     float(round(row.get("Close", 0), 6)),
+                    "high":      float(round(h, 6)),
+                    "low":       float(round(l, 6)),
+                    "close":     float(round(c, 6)),
                     "volume":    int(row.get("Volume", 0)),
+                    "vwap":      float(round((h + l + c) / 3, 6)) if (h + l + c) else "",
+                    "trades":    "",
                 })
 
     rows.sort(key=lambda r: r["timestamp"])
@@ -336,13 +342,16 @@ def fetch_cse_trades(log) -> list:
 
     if df is not None and not df.empty:
         for ts, row in df.iterrows():
+            h, l, c = float(row.get("High", 0)), float(row.get("Low", 0)), float(row.get("Close", 0))
             rows.append({
                 "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
                 "open":      float(round(row.get("Open", 0), 6)),
-                "high":      float(round(row.get("High", 0), 6)),
-                "low":       float(round(row.get("Low", 0), 6)),
-                "close":     float(round(row.get("Close", 0), 6)),
+                "high":      float(round(h, 6)),
+                "low":       float(round(l, 6)),
+                "close":     float(round(c, 6)),
                 "volume":    int(row.get("Volume", 0)),
+                "vwap":      float(round((h + l + c) / 3, 6)) if (h + l + c) else "",
+                "trades":    "",
             })
 
     # Daily bars for full 30 days
@@ -357,13 +366,16 @@ def fetch_cse_trades(log) -> list:
         for ts, row in df_daily.iterrows():
             date_str = ts.strftime("%Y-%m-%d")
             if date_str not in existing_dates:
+                h, l, c = float(row.get("High", 0)), float(row.get("Low", 0)), float(row.get("Close", 0))
                 rows.append({
                     "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
                     "open":      float(round(row.get("Open", 0), 6)),
-                    "high":      float(round(row.get("High", 0), 6)),
-                    "low":       float(round(row.get("Low", 0), 6)),
-                    "close":     float(round(row.get("Close", 0), 6)),
+                    "high":      float(round(h, 6)),
+                    "low":       float(round(l, 6)),
+                    "close":     float(round(c, 6)),
                     "volume":    int(row.get("Volume", 0)),
+                    "vwap":      float(round((h + l + c) / 3, 6)) if (h + l + c) else "",
+                    "trades":    "",
                 })
 
     rows.sort(key=lambda r: r["timestamp"])
